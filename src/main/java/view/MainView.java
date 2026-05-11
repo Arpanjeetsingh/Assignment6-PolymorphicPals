@@ -1,5 +1,8 @@
 package view;
 
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
@@ -12,14 +15,21 @@ import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Separator;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import javafx.util.Duration;
+import manager.NotificationManager;
+import model.Calendar;
 import model.Reminder;
 import model.Task;
+import model.User;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -36,6 +46,13 @@ public class MainView {
     public void show() {
         Label title = new Label("Assignment 6 - Polymorphic Pals");
         title.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
+
+        // Demo user so Calendar (which is owned by a User) has somewhere to read from.
+        User user = new User("demo", "demo@studybuddy.local", "demo123");
+        user.login("demo", "demo123");
+
+        Calendar calendar = new Calendar(user);
+        NotificationManager notifications = new NotificationManager();
 
         ObservableList<Task> tasks = FXCollections.observableArrayList();
         AtomicInteger nextTaskNum = new AtomicInteger(1);
@@ -87,6 +104,7 @@ public class MainView {
 
                 Task task = new Task(id, t, desc, deadline, priority);
                 tasks.add(task);
+                user.createTask(task);
                 taskList.getSelectionModel().select(task);
             } catch (IllegalArgumentException ex) {
                 showError("Could not save task", ex.getMessage());
@@ -124,7 +142,12 @@ public class MainView {
                 showError("No selection", "Select a task first.");
                 return;
             }
+            Reminder attached = selected.getReminder();
+            if (attached != null) {
+                notifications.cancelNotification(attached);
+            }
             tasks.remove(selected);
+            user.deleteTask(selected);
         });
 
         addReminderBtn.setOnAction(e -> {
@@ -141,8 +164,15 @@ public class MainView {
                 return;
             }
 
+            Reminder previous = selected.getReminder();
+            if (previous != null) {
+                notifications.cancelNotification(previous);
+            }
+
             String msg = reminderMessageField.getText();
-            selected.setReminder(new Reminder(msg, LocalDateTime.of(date, time)));
+            Reminder reminder = new Reminder(msg, LocalDateTime.of(date, time));
+            selected.setReminder(reminder);
+            notifications.scheduleNotification(reminder);
             tasks.set(tasks.indexOf(selected), selected);
         });
 
@@ -151,6 +181,10 @@ public class MainView {
             if (selected == null) {
                 showError("No selection", "Select a task first.");
                 return;
+            }
+            Reminder attached = selected.getReminder();
+            if (attached != null) {
+                notifications.cancelNotification(attached);
             }
             selected.removeReminder();
             tasks.set(tasks.indexOf(selected), selected);
@@ -220,17 +254,81 @@ public class MainView {
         VBox left = new VBox(10, new Label("Tasks"), taskList);
         left.setPadding(new Insets(12));
 
-        // Keep the original "framework": VBox root with title added first.
+        HBox tasksContent = new HBox(12, left, right);
+        HBox.setHgrow(right, Priority.ALWAYS);
+
+        // ===== Calendar tab =====
+        DatePicker calendarDatePicker = new DatePicker(LocalDate.now());
+        Button dailyBtn = new Button("Daily");
+        Button weeklyBtn = new Button("Weekly");
+        Button monthlyBtn = new Button("Monthly");
+        Button refreshBtn = new Button("Refresh");
+        Label calendarStatus = new Label("View: Daily");
+
+        TextArea calendarOutput = new TextArea();
+        calendarOutput.setEditable(false);
+        calendarOutput.setPrefRowCount(20);
+
+        Runnable renderCalendar = () -> {
+            LocalDate picked = calendarDatePicker.getValue();
+            if (picked != null) {
+                calendar.setSelectedDate(picked);
+            }
+            calendarOutput.setText(calendar.render());
+            calendarStatus.setText("View: " + capitalize(calendar.getCurrentView().name()));
+        };
+
+        dailyBtn.setOnAction(e -> {
+            calendar.setCurrentView(Calendar.ViewMode.DAILY);
+            renderCalendar.run();
+        });
+        weeklyBtn.setOnAction(e -> {
+            calendar.setCurrentView(Calendar.ViewMode.WEEKLY);
+            renderCalendar.run();
+        });
+        monthlyBtn.setOnAction(e -> {
+            calendar.setCurrentView(Calendar.ViewMode.MONTHLY);
+            renderCalendar.run();
+        });
+        refreshBtn.setOnAction(e -> renderCalendar.run());
+        calendarDatePicker.valueProperty().addListener((obs, o, n) -> renderCalendar.run());
+
+        // Re-render the calendar whenever the task list changes so newly
+        // saved/deleted tasks show up without the user pressing Refresh.
+        tasks.addListener((javafx.collections.ListChangeListener<Task>) c -> renderCalendar.run());
+
+        HBox calendarControls = new HBox(8, new Label("Date:"), calendarDatePicker,
+                dailyBtn, weeklyBtn, monthlyBtn, refreshBtn);
+        VBox calendarBox = new VBox(10, calendarControls, calendarStatus, calendarOutput);
+        calendarBox.setPadding(new Insets(12));
+
+        renderCalendar.run();
+
+        // Wire NotificationManager to surface popups on the JavaFX thread.
+        notifications.setListener(r -> Platform.runLater(() ->
+                showInfo("Reminder", r.getMessage() == null ? "(no message)" : r.getMessage())));
+
+        // Poll for due reminders every 2 seconds. The Observer pattern lives
+        // here: the manager watches its activeReminders and fires when due.
+        Timeline reminderPoll = new Timeline(new KeyFrame(Duration.seconds(2),
+                e -> notifications.triggerReminder()));
+        reminderPoll.setCycleCount(Timeline.INDEFINITE);
+        reminderPoll.play();
+
+        TabPane tabs = new TabPane();
+        Tab tasksTab = new Tab("Tasks", tasksContent);
+        tasksTab.setClosable(false);
+        Tab calendarTab = new Tab("Calendar", calendarBox);
+        calendarTab.setClosable(false);
+        tabs.getTabs().addAll(tasksTab, calendarTab);
+
         VBox root = new VBox(10);
         root.setPadding(new Insets(12));
         root.getChildren().add(title);
         root.getChildren().add(new Separator());
+        root.getChildren().add(tabs);
 
-        HBox content = new HBox(12, left, right);
-        HBox.setHgrow(right, Priority.ALWAYS);
-        root.getChildren().add(content);
-
-        Scene scene = new Scene(root, 600, 400);
+        Scene scene = new Scene(root, 760, 560);
         stage.setTitle("Assignment 6");
         stage.setScene(scene);
         stage.show();
@@ -268,8 +366,21 @@ public class MainView {
         }
     }
 
+    private static String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return s.charAt(0) + s.substring(1).toLowerCase();
+    }
+
     private static void showError(String title, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
+    }
+
+    private static void showInfo(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
         alert.setTitle(title);
         alert.setHeaderText(null);
         alert.setContentText(message);
