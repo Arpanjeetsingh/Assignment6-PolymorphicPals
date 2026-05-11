@@ -90,8 +90,8 @@ public class Calendar {
             throw new IllegalArgumentException("Date cannot be null.");
         }
         refreshCalendar();
-        List<Task> tasks = tasksOn(date);
-        List<Event> events = eventsOn(date);
+        List<Task> tasks = tasksFor(date);
+        List<Event> events = eventsFor(date);
 
         StringBuilder sb = new StringBuilder();
         sb.append("Daily view - ").append(date).append("\n");
@@ -117,8 +117,8 @@ public class Calendar {
         for (int i = 0; i < 7; i++) {
             LocalDate day = weekStart.plusDays(i);
             sb.append("\n").append(day).append(" (").append(day.getDayOfWeek()).append(")\n");
-            appendTasks(sb, tasksOn(day));
-            appendEvents(sb, eventsOn(day));
+            appendTasks(sb, tasksFor(day));
+            appendEvents(sb, eventsFor(day));
         }
         return sb.toString();
     }
@@ -147,8 +147,8 @@ public class Calendar {
 
         for (int day = 1; day <= month.lengthOfMonth(); day++) {
             LocalDate date = month.atDay(day);
-            List<Task> dayTasks = tasksOn(date);
-            List<Event> dayEvents = eventsOn(date);
+            List<Task> dayTasks = tasksFor(date);
+            List<Event> dayEvents = eventsFor(date);
             if (dayTasks.isEmpty() && dayEvents.isEmpty()) {
                 continue;
             }
@@ -169,7 +169,29 @@ public class Calendar {
         };
     }
 
-    private List<Task> tasksOn(LocalDate date) {
+    // Returns the dates that the current view should render, in order.
+    // DAILY = 1 date, WEEKLY = 7 dates (Mon..Sun), MONTHLY = every day of the month.
+    public List<LocalDate> visibleDates() {
+        return switch (currentView) {
+            case DAILY -> List.of(selectedDate);
+            case WEEKLY -> {
+                LocalDate start = selectedDate.with(DayOfWeek.MONDAY);
+                List<LocalDate> dates = new ArrayList<>(7);
+                for (int i = 0; i < 7; i++) dates.add(start.plusDays(i));
+                yield dates;
+            }
+            case MONTHLY -> {
+                YearMonth month = YearMonth.from(selectedDate);
+                List<LocalDate> dates = new ArrayList<>(month.lengthOfMonth());
+                for (int day = 1; day <= month.lengthOfMonth(); day++) {
+                    dates.add(month.atDay(day));
+                }
+                yield dates;
+            }
+        };
+    }
+
+    public List<Task> tasksFor(LocalDate date) {
         List<Task> matches = new ArrayList<>();
         for (Task t : taskCollection) {
             if (date.equals(t.getDeadline())) {
@@ -182,7 +204,7 @@ public class Calendar {
         return matches;
     }
 
-    private List<Event> eventsOn(LocalDate date) {
+    public List<Event> eventsFor(LocalDate date) {
         List<Event> matches = new ArrayList<>();
         for (Event e : eventCollection) {
             LocalDate eventDate = parseEventDate(e.getDate());
@@ -229,29 +251,55 @@ public class Calendar {
         }
     }
 
+    // Build the user-facing line ourselves from Task's getters rather than
+    // calling Task.toString(), which is a developer-facing summary that
+    // intentionally includes internal IDs for log readability.
     private void appendTasks(StringBuilder sb, List<Task> tasks) {
         if (tasks.isEmpty()) {
-            sb.append("  Tasks: (none)\n");
+            sb.append("  No tasks for this day.\n");
             return;
         }
         sb.append("  Tasks:\n");
         for (Task t : tasks) {
-            sb.append("    - ").append(t).append("\n");
+            String title = (t.getTitle() == null || t.getTitle().isBlank())
+                    ? "(Untitled Task)"
+                    : t.getTitle();
+            sb.append("    - ").append(title)
+                    .append("  —  ").append(priorityWord(t.getPriority()))
+                    .append(" priority, due ").append(t.getDeadline());
+            if (t.isCompleted()) {
+                sb.append("  [Done]");
+            }
+            sb.append("\n");
         }
     }
 
     private void appendEvents(StringBuilder sb, List<Event> events) {
         if (events.isEmpty()) {
-            sb.append("  Events: (none)\n");
+            sb.append("  No events for this day.\n");
             return;
         }
         sb.append("  Events:\n");
         for (Event e : events) {
-            sb.append("    - ").append(e.getTitle())
-                    .append(" [")
-                    .append(e.getStartTime()).append("-").append(e.getEndTime())
-                    .append("] @ ").append(e.getLocation())
-                    .append("\n");
+            String title = (e.getTitle() == null || e.getTitle().isBlank())
+                    ? "(Untitled Event)"
+                    : e.getTitle();
+            sb.append("    - ")
+                    .append(e.getStartTime()).append("–").append(e.getEndTime())
+                    .append("  ").append(title);
+            if (e.getLocation() != null && !e.getLocation().isBlank()) {
+                sb.append("  @ ").append(e.getLocation());
+            }
+            sb.append("\n");
         }
+    }
+
+    private String priorityWord(int priority) {
+        return switch (priority) {
+            case 1 -> "High";
+            case 2 -> "Medium";
+            case 3 -> "Low";
+            default -> "Unknown";
+        };
     }
 }

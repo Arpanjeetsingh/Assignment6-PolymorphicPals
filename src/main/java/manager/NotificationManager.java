@@ -96,12 +96,12 @@ public class NotificationManager {
     public void sendNotification(Reminder reminder) {
         if (reminder == null) return;
         reminder.markSent();
+        // Always log to stderr so the firing is observable in the console
+        // even if the UI listener swallows or hides the popup.
+        System.err.println("[NotificationManager] firing reminder: \""
+                + reminder.getMessage() + "\" (scheduled for " + reminder.getRemindAt() + ")");
         if (listener != null) {
             listener.accept(reminder);
-        } else {
-            // Fallback so the behavior is still observable without a UI hook.
-            System.out.println("[Reminder] " + reminder.getMessage()
-                    + " @ " + reminder.getRemindAt());
         }
     }
 
